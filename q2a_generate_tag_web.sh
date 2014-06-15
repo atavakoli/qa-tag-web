@@ -1,3 +1,8 @@
+#!/bin/bash
+
+export TOP_N_TAGS=50
+export EDGE_WEIGHT_CUTOFF=2
+
 cat <<EOFSTART
 <html>
   <body>
@@ -11,27 +16,43 @@ cat <<EOFSTART
 EOFSTART
 
 mysql -p --silent -e "
+  create temporary table if not exists popular_posttags_a as
+    (select count(postid) as postcount, wordid
+     from qa_posttags
+     group by wordid
+     order by postcount desc
+     limit $TOP_N_TAGS);
+
+  create temporary table if not exists popular_posttags_b as
+    (select count(postid) as postcount, wordid
+     from qa_posttags
+     group by wordid
+     order by postcount desc
+     limit $TOP_N_TAGS);
+
   select 
-    count(*), a.word, b.word
+    count(*) as weight, a.word, a.postcount, b.word, b.postcount
   from 
     (select 
-       postid, word 
+       postid, word, postcount
      from qa_posttags
+     join popular_posttags_a using (wordid)
      join qa_words using (wordid)) a
   join
     (select
-       postid, word
+       postid, word, postcount
      from qa_posttags
+     join popular_posttags_b using (wordid)
      join qa_words using (wordid)) b
   using (postid)
   where a.word > b.word
-  group by a.word, b.word
-  order by a.word, b.word
-  limit 50;" q2adb | \
-while read c w1 w2; do
-  echo "      if (!('$w1' in nodes)) nodes['$w1'] = graph.newNode({label: '$w1'});"
-  echo "      if (!('$w2' in nodes)) nodes['$w2'] = graph.newNode({label: '$w2'});"
-  echo "      graph.newEdge(nodes['$w1'], nodes['$w2'], {directional: false, weight: $c, color: '#00A0B0'});"
+  group by a.word, a.postcount, b.word, b.postcount
+  having weight >= $EDGE_WEIGHT_CUTOFF
+  order by a.word, b.word;" q2adb | \
+while read c w1 w1c w2 w2c; do
+  echo "      if (!('$w1' in nodes)) nodes['$w1'] = graph.newNode({label: '$w1 ($w1c)'});"
+  echo "      if (!('$w2' in nodes)) nodes['$w2'] = graph.newNode({label: '$w2 ($w2c)'});"
+  echo "      graph.newEdge(nodes['$w1'], nodes['$w2'], {directional: false, label: $c, weight: $c, color: '#00A0B0'});"
   echo
 done
 
@@ -43,7 +64,7 @@ cat <<EOFEND
       });
     </script>
 
-    <canvas id="springydemo" width="640" height="480" />
+    <canvas id="springydemo" width="1280" height="1024" />
   </body>
 </html>
 EOFEND
